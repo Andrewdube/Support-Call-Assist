@@ -1,0 +1,14 @@
+Agent: Thank you for calling Lenovo support, my name is Andrew. Can I get your name please?
+Customer: Hi, yes, this is Maria Gonzalez.
+Agent: Thanks Maria. And the best phone number and email for your case?
+Customer: Phone is 919-555-0142, and the email is maria dot gonzalez at contoso dot com.
+Agent: Great. What's going on with the device today?
+Customer: It's my ThinkPad T14 Gen 3. Since this morning it just won't turn on at all. No lights, nothing.
+Agent: Okay. Can you read me the serial number from the bottom of the laptop?
+Customer: Sure, it's P F 3 X 7 K 2 Q. Machine type says 21AH.
+Agent: Thank you. Is the charging light on when you plug the adapter in?
+Customer: No, the little light by the port doesn't come on. I tried a different outlet too.
+Agent: Do you have another USB-C charger you could try, like a dock or a phone charger at sixty five watts?
+Customer: I tried my coworker's Lenovo charger and still nothing.
+Agent: Alright, let's do a power drain. Unplug everything and hold the power button for twenty seconds.
+Customer: Okay... done. Plugged back in. Still completely dead.

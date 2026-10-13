@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Call Assist</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e3e6eb;
+          --red:#e2231a; --green:#1f8a4c; --amber:#b7791f; --blue:#2563eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; align-items:center; gap:12px; padding:10px 18px; background:#111827; color:#fff; }
+  header h1 { font-size:16px; margin:0; font-weight:600; } header h1 span { color:var(--red); }
+  #status { margin-left:auto; font-size:12px; color:#cbd5e1; }
+  button { border:0; border-radius:6px; padding:7px 14px; font-weight:600; cursor:pointer; }
+  .start { background:var(--green); color:#fff; } .stop { background:var(--red); color:#fff; }
+  .ghost { background:#374151; color:#fff; }
+  select { border-radius:6px; padding:6px; }
+  main { display:grid; grid-template-columns: 1fr 1.3fr 0.9fr; gap:14px; padding:14px; height:calc(100vh - 52px); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; overflow:auto; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 10px; }
+  h3 { font-size:13px; margin:16px 0 6px; }
+  #transcript .ln { margin:0 0 8px; } .spk { font-weight:700; font-size:12px; color:var(--blue); }
+  .partial { color:var(--muted); font-style:italic; }
+  ol.steps { padding-left:20px; margin:0; } ol.steps li { margin:0 0 8px; }
+  ol.steps li.done { color:var(--muted); text-decoration:line-through; }
+  .why { color:var(--muted); font-size:12px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px; margin-left:4px; background:#eef2ff; color:#3730a3; }
+  .tag.general { background:#fef3c7; color:#92400e; }
+  .tag.confirmed { background:#dcfce7; color:#166534; } .tag.likely { background:#fef3c7; color:#92400e; }
+  .tag.possible { background:#f3f4f6; color:#374151; }
+  .part { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:8px; }
+  .pn { font-family:ui-monospace,monospace; font-size:12px; }
+  ul.q { padding-left:18px; margin:0; }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; margin:0; } dt { color:var(--muted); } dd { margin:0; }
+  .ticket { padding:10px; border-radius:8px; background:#f8fafc; border:1px dashed var(--line); margin-top:10px; }
+  .ticket.ok { border-style:solid; border-color:var(--green); background:#f0fdf4; }
+  .banner { padding:6px 10px; border-radius:6px; margin-bottom:8px; font-size:12px; }
+  .banner.esc { background:#fee2e2; color:#991b1b; } .banner.err { background:#fee2e2; color:#991b1b; }
+  .empty { color:var(--muted); }
+  @media (max-width: 1000px) { main { grid-template-columns:1fr; height:auto; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Call <span>Assist</span></h1>
+  <select id="mode"><option value="demo">Demo call (scripted)</option><option value="live">Live call (audio)</option></select>
+  <button class="start" id="startBtn">Start call</button>
+  <button class="stop" id="stopBtn">End call</button>
+  <button class="ghost" id="ticketBtn">Create ticket now</button>
+  <div id="status">connecting…</div>
+</header>
+<main>
+  <section class="card"><h2>Live transcript</h2><div id="transcript"><p class="empty">Start a call to see the transcript.</p></div><div id="partial" class="partial"></div></section>
+  <section class="card">
+    <h2>Suggestions</h2>
+    <div id="errors"></div>
+    <div id="suggest"><p class="empty">Suggestions appear a few seconds into the call.</p></div>
+  </section>
+  <section class="card">
+    <h2>Ticket — Dynamics 365</h2>
+    <div id="ticket"><p class="empty">Customer details and reason for call will fill in automatically.</p></div>
+    <h3>Knowledge base used</h3><div id="kb" class="empty">—</div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let ticketState = null, lastAnalysis = null, doneSteps = new Set();
+
+async function refreshStatus() {
+  const s = await (await fetch("/api/status")).json();
+  $("status").textContent = `KB: ${s.kb_articles} articles · AI: ${s.ai ? "on" : "OFF"} · Dynamics: ${s.dynamics ? "connected" : "dry-run"}`;
+}
+
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = refreshStatus;
+  ws.onclose = () => setTimeout(connect, 1500);
+  ws.onmessage = e => handle(JSON.parse(e.data));
+}
+
+function handle(m) {
+  if (m.type === "call" && m.status === "started") {
+    $("transcript").innerHTML = ""; $("suggest").innerHTML = '<p class="empty">Listening…</p>';
+    $("ticket").innerHTML = '<p class="empty">Waiting for customer details…</p>'; $("errors").innerHTML = "";
+    ticketState = null; lastAnalysis = null; doneSteps = new Set();
+  }
+  if (m.type === "partial") $("partial").textContent = `${m.speaker}: ${m.text}`;
+  if (m.type === "line") {
+    $("partial").textContent = "";
+    $("transcript").insertAdjacentHTML("beforeend", `<p class="ln"><span class="spk">${esc(m.speaker)}</span><br>${esc(m.text)}</p>`);
+    $("transcript").parentElement.scrollTop = 1e9;
+  }
+  if (m.type === "analysis") { lastAnalysis = m.analysis; renderSuggest(m.analysis); renderTicket(); renderKB(m.articles); }
+  if (m.type === "ticket") { ticketState = m; renderTicket(); }
+  if (m.type === "error") $("errors").innerHTML = `<div class="banner err">${esc(m.message)}</div>`;
+}
+
+function renderSuggest(a) {
+  const steps = (a.troubleshooting_steps || []).map((s, i) =>
+    `<li data-i="${i}" class="${doneSteps.has(s.step) ? "done" : ""}">${esc(s.step)}<span class="tag ${s.source}">${s.source === "kb" ? "KB" : "general"}</span>
+     ${s.why ? `<div class="why">${esc(s.why)}</div>` : ""}</li>`).join("");
+  const parts = (a.parts_needed || []).map(p =>
+    `<div class="part"><b>${esc(p.part)}</b><span class="tag ${p.likelihood}">${p.likelihood}</span>
+     ${p.part_number ? `<div class="pn">FRU ${esc(p.part_number)}</div>` : ""}<div class="why">${esc(p.reason)}</div></div>`).join("");
+  $("suggest").innerHTML =
+    (a.escalate ? '<div class="banner esc">Recommend escalation to L2 / engineering</div>' : "") +
+    `<div><b>${esc(a.reason_for_call)}</b> <span class="tag">${esc(a.category || "")}</span> <span class="tag">confidence: ${esc(a.confidence)}</span></div>` +
+    `<h3>Troubleshooting (click to mark done)</h3>${steps ? `<ol class="steps">${steps}</ol>` : '<p class="empty">—</p>'}` +
+    `<h3>Parts</h3>${parts || '<p class="empty">No parts indicated yet.</p>'}` +
+    `<h3>Ask next</h3><ul class="q">${(a.questions_to_ask || []).map(q => `<li>${esc(q)}</li>`).join("")}</ul>`;
+  document.querySelectorAll("ol.steps li").forEach(li => li.onclick = () => {
+    const s = a.troubleshooting_steps[li.dataset.i].step;
+    doneSteps.has(s) ? doneSteps.delete(s) : doneSteps.add(s); li.classList.toggle("done");
+  });
+}
+
+function renderTicket() {
+  const a = lastAnalysis || {}, c = a.customer || {}, d = a.device || {};
+  const row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "";
+  let t = "";
+  if (ticketState?.case) {
+    const label = {created:"Case created", updated:"Case updated", finalized:"Notes & transcript attached", dry_run:"Dry run — Dynamics not connected"}[ticketState.status] || ticketState.status;
+    t = `<div class="ticket ok"><b>${label}</b><br>Case #: ${esc(ticketState.case.ticketnumber || ticketState.case.incidentid)}</div>`;
+  } else t = `<div class="ticket">Case will be created once name + phone/email and the reason for the call are captured.</div>`;
+  $("ticket").innerHTML = `<dl>
+    ${row("Name", c.full_name || [c.first_name, c.last_name].filter(Boolean).join(" "))}
+    ${row("Phone", c.phone)}${row("Email", c.email)}${row("Company", c.company)}
+    ${row("Product", d.product)}${row("MT", d.machine_type)}${row("Serial", d.serial_number)}${row("OS", d.os)}
+    ${row("Reason", a.reason_for_call)}</dl>${t}`;
+}
+
+function renderKB(arts) {
+  $("kb").className = ""; $("kb").innerHTML = (arts || []).length
+    ? arts.map(x => `<div>• ${esc(x.title)} <span class="tag">${x.source}</span></div>`).join("") : '<span class="empty">No matching articles</span>';
+}
+
+$("startBtn").onclick = () => fetch("/api/call/start", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({mode: $("mode").value})});
+$("stopBtn").onclick = () => fetch("/api/call/stop", {method:"POST"});
+$("ticketBtn").onclick = () => fetch("/api/ticket/create", {method:"POST"});
+connect();
+</script>
+</body>
+</html>
